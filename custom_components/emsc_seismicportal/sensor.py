@@ -7,11 +7,9 @@ import json
 import logging
 import ssl
 from concurrent.futures import ThreadPoolExecutor
-from http import HTTPStatus
 from math import atan2, cos, radians, sin, sqrt
 from typing import TYPE_CHECKING, Any
 
-import aiohttp
 import websockets
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -197,54 +195,6 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
 
         return distance <= self.radius_km
 
-    async def get_more_info_url(self, unid: str) -> str | None:
-        """Get more info URL for earthquake."""
-        url = (
-            f"https://www.seismicportal.eu/eventid/api/convert"
-            f"?source_id={unid}&source_catalog=UNID&out_catalog=EMSC"
-        )
-        try:
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with (
-                aiohttp.ClientSession(timeout=timeout) as session,
-                session.get(url) as resp,
-            ):
-                if resp.status == HTTPStatus.OK:
-                    data = await resp.json()
-
-                    # Handle case where API returns a list
-                    if isinstance(data, list):
-                        if len(data) > 0 and isinstance(data[0], dict):
-                            eventid = data[0].get("eventid")
-                        else:
-                            _LOGGER.warning(
-                                "API returned empty list or invalid format for %s",
-                                unid,
-                            )
-                            return None
-                    # Handle case where API returns a dict
-                    elif isinstance(data, dict):
-                        eventid = data.get("eventid")
-                    else:
-                        _LOGGER.warning(
-                            "API returned unexpected data type for %s: %s",
-                            unid,
-                            type(data),
-                        )
-                        return None
-                    if eventid:
-                        return f"https://www.emsc-csem.org/Earthquake/earthquake.php?id={eventid}"
-                    _LOGGER.warning("No eventid found in response for %s", unid)
-
-        except (
-            TimeoutError,
-            aiohttp.ClientError,
-            aiohttp.ServerTimeoutError,
-            json.JSONDecodeError,
-        ) as e:
-            _LOGGER.warning("Failed to fetch more_info for %s: %s", unid, e)
-        return None
-
     async def process_message(self, message: str) -> None:
         """Process an incoming WebSocket message."""
         _LOGGER.debug("Received WebSocket message: %s", message)
@@ -262,7 +212,11 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
                 _LOGGER.info("Skipping event, missing required fields.")
                 return
 
-            more_info_url = await self.get_more_info_url(unid)
+            more_info_url = (
+                f"https://www.emsc-csem.org/Earthquake/earthquake.php?id={info['source_id']}"
+                if info.get("source_id")
+                else None
+            )
 
             quake_data = {
                 "action": action,
@@ -354,7 +308,7 @@ class EMSCEarthquakeHistorySensor(RestoreEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         """Return a unique ID for this sensor."""
-        return f"emsc_earthquakes_history_{self._name}"
+        return f"emsc_earthquake_history_{self._name}"
 
     @property
     def icon(self) -> str:

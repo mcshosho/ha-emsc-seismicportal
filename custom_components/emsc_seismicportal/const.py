@@ -1,6 +1,6 @@
 """Constants for emsc_seismicportal."""
 
-DOMAIN = "emsc_seismicportal"  # Changed from "emsc_earthquake"
+DOMAIN = "emsc_seismicportal"
 DEFAULT_NAME = "Latest Earthquake"
 DEFAULT_HISTORY_LENGTH = 10
 
