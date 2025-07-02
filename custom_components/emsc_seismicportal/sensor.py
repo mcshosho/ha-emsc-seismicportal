@@ -74,7 +74,13 @@ async def async_setup_entry(
     history = EarthquakeHistory(max_len=history_length)
 
     sensor = EMSCEarthquakeSensor(hass, config, history)
-    history_sensor = EMSCEarthquakeHistorySensor(history)
+    history_sensor = EMSCEarthquakeHistorySensor(
+        history,
+        name="Earthquake History",
+        center_lat=config["center_latitude"],
+        center_lon=config["center_longitude"],
+        radius=config["radius_km"],
+    )
     async_add_entities([sensor, history_sensor], update_before_add=True)
     hass.loop.create_task(sensor.connect_to_websocket())
 
@@ -120,7 +126,13 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         """Return a unique ID for this sensor."""
-        return f"emsc_earthquake_{self._name}"
+        # Include radius and coordinates in the unique ID with 2 decimal places
+        return (
+            f"emsc_earthquake_{self._name}_"
+            f"lat{self.center_latitude:.2f}_"
+            f"lon{self.center_longitude:.2f}_"
+            f"rad{self.radius_km}"
+        )
 
     @property
     def icon(self) -> str:
@@ -284,11 +296,19 @@ class EMSCEarthquakeHistorySensor(RestoreEntity, SensorEntity):
     """Sensor to track earthquake history."""
 
     def __init__(
-        self, history: EarthquakeHistory, name: str = "Earthquake History"
+        self,
+        history: EarthquakeHistory,
+        name: str = "Earthquake History",
+        center_lat: float = 0.0,
+        center_lon: float = 0.0,
+        radius: float = 0.0,
     ) -> None:
         """Initialize the history sensor."""
         self._name = name
         self.history = history
+        self._center_lat = center_lat
+        self._center_lon = center_lon
+        self._radius = radius
 
     @property
     def name(self) -> str:
@@ -308,7 +328,13 @@ class EMSCEarthquakeHistorySensor(RestoreEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         """Return a unique ID for this sensor."""
-        return f"emsc_earthquake_history_{self._name}"
+        # Include radius and coordinates in the unique ID with 2 decimal places
+        return (
+            f"emsc_earthquake_history_{self._name}_"
+            f"lat{self._center_lat:.2f}_"
+            f"lon{self._center_lon:.2f}_"
+            f"rad{self._radius}"
+        )
 
     @property
     def icon(self) -> str:
