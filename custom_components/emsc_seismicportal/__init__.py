@@ -11,6 +11,12 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 
 
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: ARG001
+    """Set up the EMSC Seismic Portal component."""
+    hass.data.setdefault(DOMAIN, {})
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EMSC Earthquake from a config entry."""
     hass.data[DOMAIN][entry.entry_id] = entry.data
