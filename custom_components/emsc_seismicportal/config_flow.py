@@ -1,5 +1,9 @@
 """Adds config flow for Earthquake sensors."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
@@ -18,9 +22,11 @@ class EMSCEarthquakeFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         """Handle the initial step."""
-        errors = {}
+        errors: dict[str, str] = {}
 
         # Get the coordinates of zone.home
         home_zone = self.hass.states.get("zone.home")
@@ -61,7 +67,9 @@ class EMSCEarthquakeFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,  # noqa: ARG004
+    ) -> EMSCEarthquakeOptionsFlowHandler:
         """Get the options flow for this handler."""
         return EMSCEarthquakeOptionsFlowHandler()
 
@@ -69,7 +77,9 @@ class EMSCEarthquakeFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 class EMSCEarthquakeOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options for EMSC Earthquake integration."""
 
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         """Manage the options for the custom integration."""
         if user_input is not None:
             self.hass.config_entries.async_update_entry(

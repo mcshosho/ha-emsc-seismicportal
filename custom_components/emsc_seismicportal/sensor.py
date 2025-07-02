@@ -1,14 +1,19 @@
+"""EMSC Earthquake sensor implementation."""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import ssl
 from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 from math import atan2, cos, radians, sin, sqrt
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import websockets
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
@@ -19,17 +24,26 @@ from .const import (
     WEBSOCKET_URL,
 )
 
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
 _LOGGER = logging.getLogger(__name__)
 
 ssl_executor = ThreadPoolExecutor(max_workers=1)
 
 
 class EarthquakeHistory:
-    def __init__(self, max_len=10):
-        self.max_len = max_len
-        self._history = []
+    """Manage earthquake history with a maximum length."""
 
-    def add_or_update(self, quake):
+    def __init__(self, max_len: int = 10) -> None:
+        """Initialize the history."""
+        self.max_len = max_len
+        self._history: list[dict[str, Any]] = []
+
+    def add_or_update(self, quake: dict[str, Any]) -> None:
+        """Add a new earthquake or update an existing one."""
         for idx, q in enumerate(self._history):
             if q["unid"] == quake["unid"]:
                 self._history[idx] = quake
@@ -37,41 +51,33 @@ class EarthquakeHistory:
         self._history.insert(0, quake)
         self._history = self._history[: self.max_len]
 
-    def update_by_unid(self, unid, new_data):
+    def update_by_unid(self, unid: str, new_data: dict[str, Any]) -> bool:
+        """Update earthquake data by UNID."""
         for idx, q in enumerate(self._history):
             if q["unid"] == unid:
                 self._history[idx].update(new_data)
                 return True
         return False
 
-    def get_history(self):
+    def get_history(self) -> list[dict[str, Any]]:
+        """Get the earthquake history."""
         return list(self._history)
 
 
-async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up EMSC Earthquake sensor based on a config entry."""
     config = hass.data[DOMAIN][config_entry.entry_id]
 
-    name = config.get("name", DEFAULT_NAME)
-    center_latitude = config.get("center_latitude")
-    center_longitude = config.get("center_longitude")
-    radius_km = config.get("radius_km")
-    total_max_mag = config.get("total_max_mag")
-    min_mag = config.get("min_mag")
+    history_length = config.get("history_length", DEFAULT_HISTORY_LENGTH)
+    history = EarthquakeHistory(max_len=history_length)
 
-    history = EarthquakeHistory(max_len=DEFAULT_HISTORY_LENGTH)
-    sensor = EMSCEarthquakeSensor(
-        hass,
-        name,
-        center_latitude,
-        center_longitude,
-        radius_km,
-        min_mag,
-        total_max_mag,
-        history,
-    )
+    sensor = EMSCEarthquakeSensor(hass, config, history)
     history_sensor = EMSCEarthquakeHistorySensor(history)
-    async_add_entities([sensor, history_sensor], True)
+    async_add_entities([sensor, history_sensor], update_before_add=True)
     hass.loop.create_task(sensor.connect_to_websocket())
 
 
@@ -80,56 +86,51 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
 
     def __init__(
         self,
-        hass,
-        name,
-        center_latitude,
-        center_longitude,
-        radius_km,
-        min_mag,
-        total_max_mag,
-        history,
-    ):
+        hass: HomeAssistant,
+        config: dict[str, Any],
+        history: EarthquakeHistory,
+    ) -> None:
         """Initialize the sensor."""
         self.hass = hass
-        self._name = name
-        self._state = None
-        self._attributes = {}
-        self._ssl_context = None
-        self.center_latitude = center_latitude
-        self.center_longitude = center_longitude
-        self.radius_km = radius_km
-        self.total_max_mag = total_max_mag
-        self.min_mag = min_mag
+        self._name = config.get("name", DEFAULT_NAME)
+        self._state: float | None = None
+        self._attributes: dict[str, Any] = {}
+        self._ssl_context: ssl.SSLContext | None = None
+        self.center_latitude = config["center_latitude"]
+        self.center_longitude = config["center_longitude"]
+        self.radius_km = config["radius_km"]
+        self.total_max_mag = config["total_max_mag"]
+        self.min_mag = config["min_mag"]
         self.history = history
-        self._last_unid = None
+        self._last_unid: str | None = None
 
     @property
-    def name(self):
-        # Return the name of the sensor.
+    def name(self) -> str:
+        """Return the name of the sensor."""
         return self._name
 
     @property
-    def state(self):
-        # Return the state of the sensor.
+    def state(self) -> float | None:
+        """Return the state of the sensor."""
         return self._state
 
     @property
-    def extra_state_attributes(self):
-        # Return additional attributes of the sensor.
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional attributes of the sensor."""
         return self._attributes
 
     @property
-    def unique_id(self):
+    def unique_id(self) -> str:
         """Return a unique ID for this sensor."""
         return f"emsc_earthquake_{self._name}"
 
     @property
-    def icon(self):
+    def icon(self) -> str:
         """Return the icon for the sensor."""
         return "mdi:waveform"
 
-    async def connect_to_websocket(self):
-        # Connect to the EMSC WebSocket API and process messages.
+    async def connect_to_websocket(self) -> None:
+        """Connect to the EMSC WebSocket API and process messages."""
         while True:
             try:
                 # Create SSL context in a separate thread
@@ -141,36 +142,44 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
                 ) as websocket:
                     _LOGGER.info("Connected to WebSocket. Listening for messages...")
                     await self.listen_to_websocket(websocket)
-            except Exception as e:
-                _LOGGER.error("WebSocket error: %s", e)
+            except (
+                TimeoutError,
+                websockets.ConnectionClosed,
+                websockets.InvalidURI,
+                websockets.InvalidHandshake,
+                OSError,
+            ) as e:
+                _LOGGER.exception("WebSocket error: %s", e)  # noqa: TRY401
                 await asyncio.sleep(10)  # Retry after a delay
 
-    async def async_create_ssl_context(self):
-        # Create and return SSL context in a separate thread to avoid blocking the event loop.
+    async def async_create_ssl_context(self) -> ssl.SSLContext:
+        """Create and return SSL context in a separate thread to avoid blocking the event loop."""  # noqa: E501
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(ssl_executor, self.create_ssl_context)
 
-    def create_ssl_context(self):
-        # Create SSL context (blocking call, moved to separate thread).
+    def create_ssl_context(self) -> ssl.SSLContext:
+        """Create SSL context (blocking call, moved to separate thread)."""
         ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
         ssl_context.check_hostname = True
         ssl_context.verify_mode = ssl.CERT_REQUIRED
         return ssl_context
 
-    async def listen_to_websocket(self, websocket):
-        # Listen for messages on the WebSocket.
+    async def listen_to_websocket(self, websocket: Any) -> None:
+        """Listen for messages on the WebSocket."""
         try:
             async for message in websocket:
                 await self.process_message(message)
         except websockets.ConnectionClosed:
             _LOGGER.warning("WebSocket connection closed.")
         except Exception as e:
-            _LOGGER.error("Error while listening to WebSocket: %s", e)
+            _LOGGER.exception("Error while listening to WebSocket: %s", e)  # noqa: TRY401
 
-    def is_within_radius(self, earthquake_latitude, earthquake_longitude):
+    def is_within_radius(
+        self, earthquake_latitude: float, earthquake_longitude: float
+    ) -> bool:
         """Check if the given earthquake is within the specified radius."""
         # Calculate distance between central point and the earthquake location
-        R = 6371.0  # Radius of Earth in kilometers
+        R = 6371.0  # Radius of Earth in kilometers  # noqa: N806
 
         lat1 = radians(self.center_latitude)
         lon1 = radians(self.center_longitude)
@@ -188,7 +197,8 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
 
         return distance <= self.radius_km
 
-    async def get_more_info_url(self, unid):
+    async def get_more_info_url(self, unid: str) -> str | None:
+        """Get more info URL for earthquake."""
         url = (
             f"https://www.seismicportal.eu/eventid/api/convert"
             f"?source_id={unid}&source_catalog=UNID&out_catalog=EMSC"
@@ -199,7 +209,7 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.get(url) as resp,
             ):
-                if resp.status == 200:
+                if resp.status == HTTPStatus.OK:
                     data = await resp.json()
 
                     # Handle case where API returns a list
@@ -224,15 +234,19 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
                         return None
                     if eventid:
                         return f"https://www.emsc-csem.org/Earthquake/earthquake.php?id={eventid}"
-                    else:
-                        _LOGGER.warning("No eventid found in response for %s", unid)
+                    _LOGGER.warning("No eventid found in response for %s", unid)
 
-        except Exception as e:
+        except (
+            TimeoutError,
+            aiohttp.ClientError,
+            aiohttp.ServerTimeoutError,
+            json.JSONDecodeError,
+        ) as e:
             _LOGGER.warning("Failed to fetch more_info for %s: %s", unid, e)
         return None
 
-    async def process_message(self, message):
-        # Process an incoming WebSocket message.
+    async def process_message(self, message: str) -> None:
+        """Process an incoming WebSocket message."""
         _LOGGER.debug("Received WebSocket message: %s", message)
         try:
             data = json.loads(message)
@@ -291,15 +305,20 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
                 _LOGGER.info(
                     "Skipping event, parameters out of bounds: lat=%s, lon=%s", lat, lon
                 )
-                return
         except Exception as e:
-            _LOGGER.error("Error processing WebSocket message: %s", e)
+            _LOGGER.exception("Error processing WebSocket message: %s", e)  # noqa: TRY401
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """Restore state and attributes on Home Assistant startup."""
         last_state = await self.async_get_last_state()
         if last_state:
-            self._state = last_state.state
+            # Handle case where state might be 'unknown' or 'unavailable'
+            if last_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._state = float(last_state.state)
+                except (ValueError, TypeError):
+                    self._state = None
+
             self._attributes = dict(last_state.attributes)
             self._last_unid = self._attributes.get("unid")
             # Optionally, restore the latest quake to history
@@ -308,32 +327,41 @@ class EMSCEarthquakeSensor(RestoreEntity, SensorEntity):
 
 
 class EMSCEarthquakeHistorySensor(RestoreEntity, SensorEntity):
-    def __init__(self, history, name="Earthquake History"):
+    """Sensor to track earthquake history."""
+
+    def __init__(
+        self, history: EarthquakeHistory, name: str = "Earthquake History"
+    ) -> None:
+        """Initialize the history sensor."""
         self._name = name
         self.history = history
 
     @property
-    def name(self):
+    def name(self) -> str:
+        """Return the name of the sensor."""
         return self._name
 
     @property
-    def state(self):
+    def state(self) -> int:
+        """Return the state of the sensor."""
         return len(self.history.get_history())
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional attributes of the sensor."""
         return {"history": self.history.get_history()}
 
     @property
-    def unique_id(self):
+    def unique_id(self) -> str:
         """Return a unique ID for this sensor."""
         return f"emsc_earthquakes_history_{self._name}"
 
     @property
-    def icon(self):
+    def icon(self) -> str:
+        """Return the icon for the sensor."""
         return "mdi:history"
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """Restore history on Home Assistant startup."""
         last_state = await self.async_get_last_state()
         if last_state:
